@@ -196,8 +196,56 @@ where
     Ok(stream)
 }
 
+/// Resample mono i16 samples from one sample rate to another using rubato.
+fn resample_samples(samples: &[i16], from_rate: u32, to_rate: u32) -> Result<Vec<i16>, String> {
+    if from_rate == to_rate || samples.is_empty() {
+        return Ok(samples.to_vec());
+    }
+
+    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+    let chunk_size = 1024;
+    let mut resampler = SincFixedIn::<f64>::new(
+        to_rate as f64 / from_rate as f64,
+        2.0,
+        params,
+        chunk_size,
+        1,
+    ).map_err(|e| format!("Resampler init failed: {}", e))?;
+
+    let input_f64: Vec<f64> = samples.iter().map(|&s| s as f64 / i16::MAX as f64).collect();
+    let mut output_f64 = Vec::new();
+
+    for chunk_start in (0..input_f64.len()).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(input_f64.len());
+        let mut chunk = input_f64[chunk_start..chunk_end].to_vec();
+        if chunk.len() < chunk_size {
+            chunk.resize(chunk_size, 0.0);
+        }
+        let result = resampler.process(&[chunk], None)
+            .map_err(|e| format!("Resampling failed: {}", e))?;
+        output_f64.extend_from_slice(&result[0]);
+    }
+
+    // Trim to expected output length
+    let expected_len = (samples.len() as f64 * to_rate as f64 / from_rate as f64) as usize;
+    output_f64.truncate(expected_len);
+
+    Ok(output_f64.iter().map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f64) as i16).collect())
+}
+
 /// Merge mic.wav and system.wav into a stereo audio.wav (left=mic, right=system).
-/// If only mic.wav exists, rename it to audio.wav (mono).
+/// Resamples system audio to match mic sample rate if they differ.
+/// If only mic.wav exists, copies it to audio.wav (mono).
+/// Keeps mic.wav and system.wav for debugging.
 pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
     let mic_path = folder.join("mic.wav");
     let system_path = folder.join("system.wav");
@@ -214,11 +262,12 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
         let sys_reader = WavReader::open(&system_path)
             .map_err(|e| format!("Failed to open system.wav: {}", e))?;
 
-        let sample_rate = mic_reader.spec().sample_rate;
+        let mic_rate = mic_reader.spec().sample_rate;
+        let sys_rate = sys_reader.spec().sample_rate;
 
         let spec = WavSpec {
             channels: 2,
-            sample_rate,
+            sample_rate: mic_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -230,10 +279,21 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
             .into_samples::<i16>()
             .filter_map(|s| s.ok())
             .collect();
-        let sys_samples: Vec<i16> = sys_reader
+        let raw_sys_samples: Vec<i16> = sys_reader
             .into_samples::<i16>()
             .filter_map(|s| s.ok())
             .collect();
+
+        // Resample system audio to match mic sample rate if needed
+        let sys_samples = if sys_rate != mic_rate {
+            eprintln!(
+                "[audio] Resampling system audio from {}Hz to {}Hz ({} samples)",
+                sys_rate, mic_rate, raw_sys_samples.len()
+            );
+            resample_samples(&raw_sys_samples, sys_rate, mic_rate)?
+        } else {
+            raw_sys_samples
+        };
 
         let max_len = mic_samples.len().max(sys_samples.len());
         for i in 0..max_len {
@@ -245,13 +305,11 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
 
         writer.finalize().map_err(|e| format!("Failed to finalize audio.wav: {}", e))?;
 
-        // Clean up temp files
-        let _ = std::fs::remove_file(&mic_path);
-        let _ = std::fs::remove_file(&system_path);
+        // Keep mic.wav and system.wav for debugging
     } else {
-        // No system audio — just rename mic.wav to audio.wav
-        std::fs::rename(&mic_path, &audio_path)
-            .map_err(|e| format!("Failed to rename mic.wav: {}", e))?;
+        // No system audio — copy mic.wav to audio.wav (keep original for debugging)
+        std::fs::copy(&mic_path, &audio_path)
+            .map_err(|e| format!("Failed to copy mic.wav to audio.wav: {}", e))?;
     }
 
     Ok(())

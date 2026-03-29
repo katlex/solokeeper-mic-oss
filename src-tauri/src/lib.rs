@@ -109,6 +109,13 @@ fn get_recordings() -> Result<Vec<Recording>, String> {
 }
 
 #[tauri::command]
+fn get_audio_base64(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read audio: {}", e))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+#[tauri::command]
 fn search_transcripts(query: String) -> Result<Vec<Recording>, String> {
     search_recordings(&query)
 }
@@ -217,8 +224,10 @@ pub fn run() {
         .register_uri_scheme_protocol("audiofile", |_app, request| {
             let uri = request.uri();
             let path_str = uri.path();
-            // Percent-decode the path
-            let decoded = percent_decode(path_str);
+            // Strip leading slash, then percent-decode
+            let trimmed = path_str.strip_prefix('/').unwrap_or(path_str);
+            let decoded = percent_decode(trimmed);
+            eprintln!("[audiofile] Requested: {} -> {}", path_str, decoded);
 
             match std::fs::read(&decoded) {
                 Ok(content) => {
@@ -282,6 +291,7 @@ pub fn run() {
             get_settings,
             save_app_settings,
             save_speaker_names,
+            get_audio_base64,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

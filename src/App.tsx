@@ -60,7 +60,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 function audioFileUrl(path: string): string {
-  return `http://audiofile.localhost${path}`;
+  return `http://audiofile.localhost/${encodeURIComponent(path)}`;
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -96,6 +96,7 @@ function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
+
 
   // Speaker naming
   const [editingSpeakers, setEditingSpeakers] = useState(false);
