@@ -250,8 +250,9 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
         let mic_rate = mic_reader.spec().sample_rate;
         let sys_rate = sys_reader.spec().sample_rate;
 
+        // Mix to mono: both voices in one channel (better for transcription + playback)
         let spec = WavSpec {
-            channels: 2,
+            channels: 1,
             sample_rate: mic_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
@@ -282,13 +283,15 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
 
         let max_len = mic_samples.len().max(sys_samples.len());
         for i in 0..max_len {
-            let mic = mic_samples.get(i).copied().unwrap_or(0);
-            let sys = sys_samples.get(i).copied().unwrap_or(0);
-            writer.write_sample(mic).map_err(|e| format!("Write error: {}", e))?;
-            writer.write_sample(sys).map_err(|e| format!("Write error: {}", e))?;
+            let mic = mic_samples.get(i).copied().unwrap_or(0) as i32;
+            let sys = sys_samples.get(i).copied().unwrap_or(0) as i32;
+            // Mix and clamp to prevent clipping
+            let mixed = ((mic + sys) / 2).clamp(-32768, 32767) as i16;
+            writer.write_sample(mixed).map_err(|e| format!("Write error: {}", e))?;
         }
 
         writer.finalize().map_err(|e| format!("Failed to finalize audio.wav: {}", e))?;
+        eprintln!("[audio] Merged to mono audio.wav: {} samples @ {}Hz", max_len, mic_rate);
 
         // Keep mic.wav and system.wav for debugging
     } else {
