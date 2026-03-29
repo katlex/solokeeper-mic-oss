@@ -197,50 +197,34 @@ where
     Ok(stream)
 }
 
-/// Resample mono i16 samples from one sample rate to another using rubato.
+/// Resample mono i16 samples using linear interpolation (simple, robust).
 fn resample_samples(samples: &[i16], from_rate: u32, to_rate: u32) -> Result<Vec<i16>, String> {
     if from_rate == to_rate || samples.is_empty() {
         return Ok(samples.to_vec());
     }
 
-    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+    let ratio = from_rate as f64 / to_rate as f64;
+    let output_len = (samples.len() as f64 / ratio) as usize;
+    let mut output = Vec::with_capacity(output_len);
 
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
+    for i in 0..output_len {
+        let src_pos = i as f64 * ratio;
+        let idx = src_pos as usize;
+        let frac = src_pos - idx as f64;
 
-    let chunk_size = 1024;
-    let mut resampler = SincFixedIn::<f64>::new(
-        to_rate as f64 / from_rate as f64,
-        2.0,
-        params,
-        chunk_size,
-        1,
-    ).map_err(|e| format!("Resampler init failed: {}", e))?;
+        let s0 = samples[idx] as f64;
+        let s1 = if idx + 1 < samples.len() {
+            samples[idx + 1] as f64
+        } else {
+            s0
+        };
 
-    let input_f64: Vec<f64> = samples.iter().map(|&s| s as f64 / i16::MAX as f64).collect();
-    let mut output_f64 = Vec::new();
-
-    for chunk_start in (0..input_f64.len()).step_by(chunk_size) {
-        let chunk_end = (chunk_start + chunk_size).min(input_f64.len());
-        let mut chunk = input_f64[chunk_start..chunk_end].to_vec();
-        if chunk.len() < chunk_size {
-            chunk.resize(chunk_size, 0.0);
-        }
-        let result = resampler.process(&[chunk], None)
-            .map_err(|e| format!("Resampling failed: {}", e))?;
-        output_f64.extend_from_slice(&result[0]);
+        let interpolated = s0 + frac * (s1 - s0);
+        output.push(interpolated.clamp(-32768.0, 32767.0) as i16);
     }
 
-    // Trim to expected output length
-    let expected_len = (samples.len() as f64 * to_rate as f64 / from_rate as f64) as usize;
-    output_f64.truncate(expected_len);
-
-    Ok(output_f64.iter().map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f64) as i16).collect())
+    eprintln!("[audio] Resampled {} -> {} samples ({}Hz -> {}Hz)", samples.len(), output.len(), from_rate, to_rate);
+    Ok(output)
 }
 
 /// Merge mic.wav and system.wav into a stereo audio.wav (left=mic, right=system).
