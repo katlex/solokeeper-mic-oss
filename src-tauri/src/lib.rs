@@ -2,7 +2,7 @@ mod audio;
 mod recordings;
 mod settings;
 
-use audio::AudioRecorder;
+use audio::{AudioRecorder, merge_to_audio_wav};
 use recordings::{Recording, create_meeting_folder, list_recordings, update_meeting_duration, update_speaker_names, search_recordings};
 use settings::{AppSettings, load_settings, save_settings};
 use std::collections::HashMap;
@@ -12,7 +12,8 @@ use std::time::Instant;
 use tauri::{Manager, menu::{MenuBuilder, MenuItemBuilder}, tray::TrayIconBuilder};
 
 struct AppState {
-    recorder: Mutex<AudioRecorder>,
+    mic_recorder: Mutex<AudioRecorder>,
+    system_recorder: Mutex<AudioRecorder>,
     current_folder: Mutex<Option<PathBuf>>,
     recording_start: Mutex<Option<Instant>>,
 }
@@ -24,11 +25,27 @@ fn get_input_devices() -> Vec<String> {
 
 #[tauri::command]
 fn start_recording(state: tauri::State<AppState>) -> Result<String, String> {
+    let settings = load_settings();
     let (folder_path, id) = create_meeting_folder()?;
-    let audio_path = folder_path.join("audio.wav");
 
-    let recorder = state.recorder.lock().unwrap();
-    recorder.start_recording(audio_path)?;
+    // Start mic recording
+    let mic_path = if settings.system_audio_device.is_some() {
+        folder_path.join("mic.wav")
+    } else {
+        folder_path.join("audio.wav")
+    };
+
+    let mic_recorder = state.mic_recorder.lock().unwrap();
+    mic_recorder.start_recording(mic_path, settings.audio_input_device.as_deref())?;
+
+    // Start system audio recording if a device is configured
+    if let Some(ref sys_device) = settings.system_audio_device {
+        let sys_path = folder_path.join("system.wav");
+        let sys_recorder = state.system_recorder.lock().unwrap();
+        if let Err(e) = sys_recorder.start_recording(sys_path, Some(sys_device.as_str())) {
+            eprintln!("Failed to start system audio capture: {}. Continuing with mic only.", e);
+        }
+    }
 
     *state.current_folder.lock().unwrap() = Some(folder_path);
     *state.recording_start.lock().unwrap() = Some(Instant::now());
@@ -38,8 +55,15 @@ fn start_recording(state: tauri::State<AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
-    let recorder = state.recorder.lock().unwrap();
-    recorder.stop_recording()?;
+    // Stop mic
+    let mic_recorder = state.mic_recorder.lock().unwrap();
+    mic_recorder.stop_recording()?;
+
+    // Stop system audio if it was recording
+    let sys_recorder = state.system_recorder.lock().unwrap();
+    if sys_recorder.is_recording() {
+        sys_recorder.stop_recording()?;
+    }
 
     let folder_path = state.current_folder.lock().unwrap().clone();
     let start_time = state.recording_start.lock().unwrap().take();
@@ -47,6 +71,14 @@ fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
     if let (Some(folder), Some(start)) = (&folder_path, start_time) {
         let duration = start.elapsed().as_secs();
         update_meeting_duration(folder, duration)?;
+    }
+
+    // Merge mic + system into stereo audio.wav if both exist
+    if let Some(ref folder) = folder_path {
+        let mic_path = folder.join("mic.wav");
+        if mic_path.exists() {
+            merge_to_audio_wav(folder)?;
+        }
     }
 
     let path = folder_path
@@ -59,7 +91,7 @@ fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn get_recording_status(state: tauri::State<AppState>) -> (bool, f32, u64) {
-    let recorder = state.recorder.lock().unwrap();
+    let recorder = state.mic_recorder.lock().unwrap();
     let is_recording = recorder.is_recording();
     let level = recorder.get_level();
     let elapsed = state
@@ -177,9 +209,35 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
-            recorder: Mutex::new(AudioRecorder::new()),
+            mic_recorder: Mutex::new(AudioRecorder::new()),
+            system_recorder: Mutex::new(AudioRecorder::new()),
             current_folder: Mutex::new(None),
             recording_start: Mutex::new(None),
+        })
+        .register_uri_scheme_protocol("audiofile", |_app, request| {
+            let uri = request.uri();
+            let path_str = uri.path();
+            // Percent-decode the path
+            let decoded = percent_decode(path_str);
+
+            match std::fs::read(&decoded) {
+                Ok(content) => {
+                    let len = content.len();
+                    tauri::http::Response::builder()
+                        .header("Content-Type", "audio/wav")
+                        .header("Content-Length", len.to_string())
+                        .header("Accept-Ranges", "bytes")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(content)
+                        .unwrap()
+                }
+                Err(_) => {
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .body(b"File not found".to_vec())
+                        .unwrap()
+                }
+            }
         })
         .setup(|app| {
             // Set up tray icon with menu
@@ -227,4 +285,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Simple percent-decoding for URI paths.
+fn percent_decode(input: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) = u8::from_str_radix(
+                &String::from_utf8_lossy(&bytes[i + 1..i + 3]),
+                16,
+            ) {
+                result.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).to_string()
 }

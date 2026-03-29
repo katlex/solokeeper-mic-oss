@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub audio_input_device: Option<String>,
+    pub system_audio_device: Option<String>,
     pub whisper_model: String,
     pub language: String,
     pub storage_path: String,
@@ -23,6 +24,7 @@ impl Default for AppSettings {
 
         Self {
             audio_input_device: None,
+            system_audio_device: None,
             whisper_model: "small".to_string(),
             language: "auto".to_string(),
             storage_path: default_storage,

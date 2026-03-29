@@ -1,8 +1,8 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, StreamConfig};
-use hound::{WavSpec, WavWriter};
+use hound::{WavReader, WavSpec, WavWriter};
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -33,17 +33,20 @@ impl AudioRecorder {
             .unwrap_or_default()
     }
 
-    pub fn start_recording(&self, output_path: PathBuf) -> Result<(), String> {
+    /// Start recording from the specified device (or default if None).
+    pub fn start_recording(&self, output_path: PathBuf, device_name: Option<&str>) -> Result<(), String> {
         if *self.is_recording.lock().unwrap() {
             return Err("Already recording".to_string());
         }
 
-        // Set up WAV writer and device config on the main thread so we can
-        // return errors synchronously.
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or("No input device available")?;
+        let device = match device_name {
+            Some(name) => find_input_device_by_name(name)
+                .ok_or_else(|| format!("Audio device '{}' not found", name))?,
+            None => host
+                .default_input_device()
+                .ok_or("No input device available")?,
+        };
 
         let config = device
             .default_input_config()
@@ -140,6 +143,13 @@ impl AudioRecorder {
     }
 }
 
+fn find_input_device_by_name(name: &str) -> Option<Device> {
+    let host = cpal::default_host();
+    host.input_devices()
+        .ok()?
+        .find(|d| d.name().ok().as_deref() == Some(name))
+}
+
 fn build_stream<T: cpal::Sample + cpal::SizedSample + Send + 'static>(
     device: &Device,
     config: &StreamConfig,
@@ -184,4 +194,65 @@ where
         .map_err(|e| format!("Failed to build input stream: {}", e))?;
 
     Ok(stream)
+}
+
+/// Merge mic.wav and system.wav into a stereo audio.wav (left=mic, right=system).
+/// If only mic.wav exists, rename it to audio.wav (mono).
+pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
+    let mic_path = folder.join("mic.wav");
+    let system_path = folder.join("system.wav");
+    let audio_path = folder.join("audio.wav");
+
+    if !mic_path.exists() {
+        return Err("Mic recording not found".to_string());
+    }
+
+    if system_path.exists() {
+        // Merge to stereo: left=mic, right=system
+        let mic_reader = WavReader::open(&mic_path)
+            .map_err(|e| format!("Failed to open mic.wav: {}", e))?;
+        let sys_reader = WavReader::open(&system_path)
+            .map_err(|e| format!("Failed to open system.wav: {}", e))?;
+
+        let sample_rate = mic_reader.spec().sample_rate;
+
+        let spec = WavSpec {
+            channels: 2,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+
+        let mut writer = WavWriter::create(&audio_path, spec)
+            .map_err(|e| format!("Failed to create audio.wav: {}", e))?;
+
+        let mic_samples: Vec<i16> = mic_reader
+            .into_samples::<i16>()
+            .filter_map(|s| s.ok())
+            .collect();
+        let sys_samples: Vec<i16> = sys_reader
+            .into_samples::<i16>()
+            .filter_map(|s| s.ok())
+            .collect();
+
+        let max_len = mic_samples.len().max(sys_samples.len());
+        for i in 0..max_len {
+            let mic = mic_samples.get(i).copied().unwrap_or(0);
+            let sys = sys_samples.get(i).copied().unwrap_or(0);
+            writer.write_sample(mic).map_err(|e| format!("Write error: {}", e))?;
+            writer.write_sample(sys).map_err(|e| format!("Write error: {}", e))?;
+        }
+
+        writer.finalize().map_err(|e| format!("Failed to finalize audio.wav: {}", e))?;
+
+        // Clean up temp files
+        let _ = std::fs::remove_file(&mic_path);
+        let _ = std::fs::remove_file(&system_path);
+    } else {
+        // No system audio — just rename mic.wav to audio.wav
+        std::fs::rename(&mic_path, &audio_path)
+            .map_err(|e| format!("Failed to rename mic.wav: {}", e))?;
+    }
+
+    Ok(())
 }

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +35,7 @@ interface Recording {
 
 interface AppSettings {
   audio_input_device: string | null;
+  system_audio_device: string | null;
   whisper_model: string;
   language: string;
   storage_path: string;
@@ -57,6 +57,10 @@ function formatTimestamp(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+function audioFileUrl(path: string): string {
+  return `http://audiofile.localhost${path}`;
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -593,7 +597,7 @@ function RecordingsPage({
             {/* Audio Player */}
             {selectedRecording.audio_path && (
               <div className="px-6 py-3 border-b border-border bg-bg-secondary flex items-center gap-3">
-                <audio ref={audioRef} src={convertFileSrc(selectedRecording.audio_path)} preload="metadata" />
+                <audio ref={audioRef} src={audioFileUrl(selectedRecording.audio_path)} preload="metadata" />
                 <button
                   onClick={() => {
                     if (audioRef.current) {
@@ -731,13 +735,30 @@ function SettingsPage({
 
         <div className="space-y-6">
           {/* Audio Input */}
-          <SettingsField label="Audio Input Device">
+          <SettingsField label="Microphone Device">
             <select
               value={settings.audio_input_device || ""}
               onChange={(e) => onUpdate({ audio_input_device: e.target.value || null })}
               className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded text-sm text-text-primary focus:outline-none focus:border-accent"
             >
               <option value="">System Default</option>
+              {inputDevices.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </SettingsField>
+
+          {/* System Audio */}
+          <SettingsField
+            label="System Audio Device"
+            hint="Captures what you hear (other people on the call). On macOS, install BlackHole to create a loopback device. On Linux, use a PulseAudio/PipeWire monitor source."
+          >
+            <select
+              value={settings.system_audio_device || ""}
+              onChange={(e) => onUpdate({ system_audio_device: e.target.value || null })}
+              className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded text-sm text-text-primary focus:outline-none focus:border-accent"
+            >
+              <option value="">None (mic only)</option>
               {inputDevices.map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
