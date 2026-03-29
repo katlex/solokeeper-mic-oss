@@ -1,0 +1,26 @@
+[package]
+name = "solokeeper-mic"
+version = "0.1.0"
+description = "Desktop meeting recorder with local AI transcription"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "solokeeper_mic_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cpal = "0.15"
+hound = "3.5"
+chrono = "0.4"
+tokio = { version = "1", features = ["full"] }
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["json"] }

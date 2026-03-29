@@ -1,0 +1,14 @@
+[project]
+name = "solokeeper-sidecar"
+version = "0.1.0"
+description = "SoloKeeper Mic transcription sidecar (faster-whisper)"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+solokeeper-sidecar = "server:main"
