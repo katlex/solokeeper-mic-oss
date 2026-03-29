@@ -55,12 +55,29 @@ impl AudioRecorder {
         let channels = default_config.channels() as usize;
         let sample_format = default_config.sample_format();
 
-        // Force 48kHz for consistent merge between mic and system audio
-        let sample_rate = 48000u32;
-        let stream_config = StreamConfig {
-            channels: default_config.channels(),
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
+        // Try 48kHz for consistent merge, fall back to device default
+        let target_rate = cpal::SampleRate(48000);
+        let supported = device.supported_input_configs()
+            .ok()
+            .and_then(|mut configs| configs.find(|c| {
+                c.min_sample_rate() <= target_rate && c.max_sample_rate() >= target_rate
+                    && c.sample_format() == sample_format
+            }));
+
+        let (sample_rate, stream_config) = if supported.is_some() {
+            (48000u32, StreamConfig {
+                channels: default_config.channels(),
+                sample_rate: target_rate,
+                buffer_size: cpal::BufferSize::Default,
+            })
+        } else {
+            eprintln!("[audio] Device doesn't support 48kHz, using default: {}Hz", default_config.sample_rate().0);
+            let rate = default_config.sample_rate().0;
+            (rate, StreamConfig {
+                channels: default_config.channels(),
+                sample_rate: default_config.sample_rate(),
+                buffer_size: cpal::BufferSize::Default,
+            })
         };
 
         let spec = WavSpec {
