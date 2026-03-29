@@ -53,7 +53,7 @@ def get_diarization_pipeline():
         print("Loading pyannote diarization pipeline...", flush=True)
         _diarization_pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=_hf_token,
+            token=_hf_token,
         )
         print("Diarization pipeline loaded.", flush=True)
     return _diarization_pipeline
