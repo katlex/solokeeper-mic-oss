@@ -1,0 +1,8 @@
+pyproject.toml
+server.py
+solokeeper_sidecar.egg-info/PKG-INFO
+solokeeper_sidecar.egg-info/SOURCES.txt
+solokeeper_sidecar.egg-info/dependency_links.txt
+solokeeper_sidecar.egg-info/entry_points.txt
+solokeeper_sidecar.egg-info/requires.txt
+solokeeper_sidecar.egg-info/top_level.txt

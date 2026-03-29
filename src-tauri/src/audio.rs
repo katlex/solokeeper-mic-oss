@@ -48,14 +48,20 @@ impl AudioRecorder {
                 .ok_or("No input device available")?,
         };
 
-        let config = device
+        let default_config = device
             .default_input_config()
             .map_err(|e| format!("Failed to get default input config: {}", e))?;
 
-        let sample_rate = config.sample_rate().0;
-        let channels = config.channels() as usize;
-        let sample_format = config.sample_format();
-        let stream_config: StreamConfig = config.into();
+        let channels = default_config.channels() as usize;
+        let sample_format = default_config.sample_format();
+
+        // Force 48kHz for consistent merge between mic and system audio
+        let sample_rate = 48000u32;
+        let stream_config = StreamConfig {
+            channels: default_config.channels(),
+            sample_rate: cpal::SampleRate(sample_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
 
         let spec = WavSpec {
             channels: 1,

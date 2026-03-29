@@ -1,0 +1,2 @@
+[console_scripts]
+solokeeper-sidecar = server:main
