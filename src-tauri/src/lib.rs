@@ -94,19 +94,18 @@ fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_recording_status(state: tauri::State<AppState>) -> (bool, f32, u64) {
+fn get_recording_status(state: tauri::State<AppState>) -> (bool, f32, f32, u64) {
     let mic = state.mic_recorder.lock().unwrap();
     let is_recording = mic.is_recording();
     let mic_level = mic.get_level();
     let sys_level = state.system_recorder.lock().unwrap().get_level();
-    let level = mic_level.max(sys_level);
     let elapsed = state
         .recording_start
         .lock()
         .unwrap()
         .map(|s| s.elapsed().as_secs())
         .unwrap_or(0);
-    (is_recording, level, elapsed)
+    (is_recording, mic_level, sys_level, elapsed)
 }
 
 #[tauri::command]

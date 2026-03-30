@@ -81,7 +81,8 @@ function highlightMatch(text: string, query: string): React.ReactNode {
 function App() {
   const [page, setPage] = useState<Page>("recordings");
   const [isRecording, setIsRecording] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
+  const [micLevel, setMicLevel] = useState(0);
+  const [systemLevel, setSystemLevel] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null);
@@ -140,10 +141,11 @@ function App() {
     if (isRecording) {
       pollRef.current = window.setInterval(async () => {
         try {
-          const [recording, level, secs] = await invoke<[boolean, number, number]>(
+          const [recording, mic, sys, secs] = await invoke<[boolean, number, number, number]>(
             "get_recording_status"
           );
-          setAudioLevel(level);
+          setMicLevel(mic);
+          setSystemLevel(sys);
           setElapsed(secs);
           if (!recording) setIsRecording(false);
         } catch (e) {
@@ -199,7 +201,8 @@ function App() {
       setError(null);
       await invoke("stop_recording");
       setIsRecording(false);
-      setAudioLevel(0);
+      setMicLevel(0);
+      setSystemLevel(0);
       setElapsed(0);
       await loadRecordings();
     } catch (e) {
@@ -287,7 +290,6 @@ function App() {
     if (page === "settings") loadSettings();
   }, [page]);
 
-  const levelWidth = Math.min(audioLevel * 300, 100);
   const displayRecordings = searchResults ?? recordings;
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -344,7 +346,8 @@ function App() {
         <RecordingsPage
           isRecording={isRecording}
           elapsed={elapsed}
-          levelWidth={levelWidth}
+          micLevel={micLevel}
+          systemLevel={systemLevel}
           recordings={displayRecordings}
           selectedRecording={selectedRecording}
           transcribing={transcribing}
@@ -391,7 +394,7 @@ function App() {
 // ─── Recordings Page ─────────────────────────────────────────────────────────
 
 function RecordingsPage({
-  isRecording, elapsed, levelWidth, recordings, selectedRecording,
+  isRecording, elapsed, micLevel, systemLevel, recordings, selectedRecording,
   transcribing, sidecarOnline, searchQuery, isSearching,
   onStartRecording, onStopRecording, onSelectRecording, onTranscribe, onSearch,
   onSeekTo, audioRef, isPlaying, playbackTime,
@@ -400,7 +403,8 @@ function RecordingsPage({
 }: {
   isRecording: boolean;
   elapsed: number;
-  levelWidth: number;
+  micLevel: number;
+  systemLevel: number;
   recordings: Recording[];
   selectedRecording: Recording | null;
   transcribing: string | null;
@@ -435,11 +439,9 @@ function RecordingsPage({
             </div>
           )}
           {isRecording && (
-            <div className="w-48 h-1.5 bg-bg-tertiary rounded-full mb-3 overflow-hidden">
-              <div
-                className="h-full bg-accent rounded-full transition-all duration-75"
-                style={{ width: `${levelWidth}%` }}
-              />
+            <div className="flex items-end gap-3 mb-3">
+              <VuMeter label="Mic" level={micLevel} />
+              <VuMeter label="System" level={systemLevel} />
             </div>
           )}
           <button
@@ -665,6 +667,60 @@ function RecordingsPage({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── VU Meter ───────────────────────────────────────────────────────────────
+
+function VuMeter({ label, level }: { label: string; level: number }) {
+  const clampedLevel = Math.max(0, Math.min(1, level));
+  const db = clampedLevel > 0 ? 20 * Math.log10(clampedLevel) : -60;
+  const pct = ((db + 60) / 60) * 100; // -60dB = 0%, 0dB = 100%
+  const clampedPct = Math.max(0, Math.min(100, pct));
+
+  // Color of the top of the filled region
+  const barColor = db > -6 ? "#ef4444" : db > -12 ? "#eab308" : "#22c55e";
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative w-5 h-[120px] bg-bg-tertiary rounded overflow-hidden border border-border">
+        {/* dB scale marks */}
+        {[-6, -12, -24, -48].map((mark) => {
+          const markPct = ((mark + 60) / 60) * 100;
+          return (
+            <div
+              key={mark}
+              className="absolute left-0 w-full border-t border-white/10"
+              style={{ bottom: `${markPct}%` }}
+            />
+          );
+        })}
+        {/* Filled bar */}
+        <div
+          className="absolute bottom-0 left-0 w-full rounded-t-sm"
+          style={{
+            height: `${clampedPct}%`,
+            background: `linear-gradient(to top, #22c55e 0%, #22c55e 60%, #eab308 80%, #ef4444 100%)`,
+            transition: "height 75ms ease-out",
+            opacity: clampedLevel > 0 ? 1 : 0.3,
+          }}
+        />
+        {/* Peak indicator line */}
+        <div
+          className="absolute left-0 w-full h-0.5"
+          style={{
+            bottom: `${clampedPct}%`,
+            backgroundColor: barColor,
+            transition: "bottom 75ms ease-out",
+            opacity: clampedLevel > 0 ? 1 : 0,
+          }}
+        />
+      </div>
+      <span className="text-[10px] font-mono text-text-secondary">
+        {clampedLevel > 0 ? `${Math.round(db)}` : "-∞"}
+      </span>
+      <span className="text-[10px] text-text-secondary">{label}</span>
     </div>
   );
 }
