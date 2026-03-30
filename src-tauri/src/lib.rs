@@ -1,8 +1,10 @@
 mod audio;
 mod recordings;
+mod screencapture;
 mod settings;
 
 use audio::{AudioRecorder, merge_to_audio_wav};
+use screencapture::SystemRecorder;
 use recordings::{Recording, create_meeting_folder, list_recordings, update_meeting_duration, update_speaker_names, search_recordings};
 use settings::{AppSettings, load_settings, save_settings};
 use std::collections::HashMap;
@@ -13,7 +15,7 @@ use tauri::{Manager, menu::{MenuBuilder, MenuItemBuilder}, tray::TrayIconBuilder
 
 struct AppState {
     mic_recorder: Mutex<AudioRecorder>,
-    system_recorder: Mutex<AudioRecorder>,
+    system_recorder: Mutex<SystemRecorder>,
     current_folder: Mutex<Option<PathBuf>>,
     recording_start: Mutex<Option<Instant>>,
 }
@@ -28,8 +30,10 @@ fn start_recording(state: tauri::State<AppState>) -> Result<String, String> {
     let settings = load_settings();
     let (folder_path, id) = create_meeting_folder()?;
 
-    // Start mic recording
-    let mic_path = if settings.system_audio_device.is_some() {
+    // If system audio is enabled, write mic to mic.wav (merged later);
+    // otherwise write directly to audio.wav.
+    let capture_system = settings.system_audio_device.is_some();
+    let mic_path = if capture_system {
         folder_path.join("mic.wav")
     } else {
         folder_path.join("audio.wav")
@@ -38,11 +42,11 @@ fn start_recording(state: tauri::State<AppState>) -> Result<String, String> {
     let mic_recorder = state.mic_recorder.lock().unwrap();
     mic_recorder.start_recording(mic_path, settings.audio_input_device.as_deref())?;
 
-    // Start system audio recording if a device is configured
-    if let Some(ref sys_device) = settings.system_audio_device {
+    // Start system audio capture via ScreenCaptureKit (no BlackHole needed)
+    if capture_system {
         let sys_path = folder_path.join("system.wav");
         let sys_recorder = state.system_recorder.lock().unwrap();
-        if let Err(e) = sys_recorder.start_recording(sys_path, Some(sys_device.as_str())) {
+        if let Err(e) = sys_recorder.start_recording(sys_path) {
             eprintln!("Failed to start system audio capture: {}. Continuing with mic only.", e);
         }
     }
@@ -91,9 +95,11 @@ fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
 
 #[tauri::command]
 fn get_recording_status(state: tauri::State<AppState>) -> (bool, f32, u64) {
-    let recorder = state.mic_recorder.lock().unwrap();
-    let is_recording = recorder.is_recording();
-    let level = recorder.get_level();
+    let mic = state.mic_recorder.lock().unwrap();
+    let is_recording = mic.is_recording();
+    let mic_level = mic.get_level();
+    let sys_level = state.system_recorder.lock().unwrap().get_level();
+    let level = mic_level.max(sys_level);
     let elapsed = state
         .recording_start
         .lock()
@@ -217,7 +223,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             mic_recorder: Mutex::new(AudioRecorder::new()),
-            system_recorder: Mutex::new(AudioRecorder::new()),
+            system_recorder: Mutex::new(SystemRecorder::new()),
             current_folder: Mutex::new(None),
             recording_start: Mutex::new(None),
         })
@@ -240,10 +246,11 @@ pub fn run() {
                         .body(content)
                         .unwrap()
                 }
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("[audiofile] Error reading '{}': {}", decoded, e);
                     tauri::http::Response::builder()
                         .status(404)
-                        .body(b"File not found".to_vec())
+                        .body(format!("File not found: {}", e).into_bytes())
                         .unwrap()
                 }
             }

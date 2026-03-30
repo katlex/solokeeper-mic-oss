@@ -60,7 +60,9 @@ function formatTimestamp(seconds: number): string {
 }
 
 function audioFileUrl(path: string): string {
-  return `http://audiofile.localhost/${encodeURIComponent(path)}`;
+  // Encode each path segment separately, preserving slashes
+  const encoded = path.split('/').map(encodeURIComponent).join('/');
+  return `http://audiofile.localhost${encoded}`;
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -751,19 +753,26 @@ function SettingsPage({
 
           {/* System Audio */}
           <SettingsField
-            label="System Audio Device"
-            hint="Captures what you hear (other people on the call). On macOS, install BlackHole to create a loopback device. On Linux, use a PulseAudio/PipeWire monitor source."
+            label="Capture System Audio"
+            hint="Records what you hear (other people on the call) using macOS ScreenCaptureKit. Requires Screen Recording permission."
           >
-            <select
-              value={settings.system_audio_device || ""}
-              onChange={(e) => onUpdate({ system_audio_device: e.target.value || null })}
-              className="w-full px-3 py-2 bg-bg-tertiary border border-border rounded text-sm text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="">None (mic only)</option>
-              {inputDevices.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div
+                className={`relative w-11 h-6 rounded-full transition-colors ${
+                  settings.system_audio_device ? "bg-accent" : "bg-bg-tertiary border border-border"
+                }`}
+                onClick={() => onUpdate({ system_audio_device: settings.system_audio_device ? null : "screencapturekit" })}
+              >
+                <div
+                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    settings.system_audio_device ? "translate-x-[22px]" : "translate-x-[2px]"
+                  }`}
+                />
+              </div>
+              <span className="text-sm text-text-primary">
+                {settings.system_audio_device ? "Enabled" : "Disabled"}
+              </span>
+            </label>
           </SettingsField>
 
           {/* Whisper Model */}

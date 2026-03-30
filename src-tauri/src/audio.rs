@@ -1,7 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, StreamConfig};
 use hound::{WavReader, WavSpec, WavWriter};
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -87,8 +86,16 @@ impl AudioRecorder {
 
         let host = cpal::default_host();
         let device = match device_name {
-            Some(name) => find_input_device_by_name(name)
-                .ok_or_else(|| format!("Audio device '{}' not found", name))?,
+            Some(name) => {
+                match find_input_device_by_name(name) {
+                    Some(d) => d,
+                    None => {
+                        eprintln!("[audio] Device '{}' not found, falling back to system default", name);
+                        host.default_input_device()
+                            .ok_or("No input device available")?
+                    }
+                }
+            },
             None => host
                 .default_input_device()
                 .ok_or("No input device available")?,
@@ -337,7 +344,8 @@ pub fn merge_to_audio_wav(folder: &Path) -> Result<(), String> {
         for i in 0..max_len {
             let mic = mic_samples.get(i).copied().unwrap_or(0) as i32;
             let sys = sys_samples.get(i).copied().unwrap_or(0) as i32;
-            let mixed = ((mic + sys) / 2).clamp(-32768, 32767) as i16;
+            // Sum and soft-clip instead of dividing by 2 (preserves volume)
+            let mixed = (mic + sys).clamp(-32768, 32767) as i16;
             writer.write_sample(mixed).map_err(|e| format!("Write error: {}", e))?;
         }
 
