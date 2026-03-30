@@ -180,25 +180,8 @@ async def transcribe(req: TranscribeRequest):
         detected_language = info.language
         duration = info.duration
 
-        # --- Step 2: Diarization (if enabled and HF token available) ---
+        # --- Step 2: Save transcript immediately (before diarization) ---
         speakers: list[str] = []
-        if req.diarize and _hf_token:
-            try:
-                pipeline = get_diarization_pipeline()
-                print(f"Running diarization on {audio_path}...", flush=True)
-                diarize_result = pipeline(str(audio_path))
-                # pyannote >= 3.x returns DiarizeOutput; extract Annotation
-                if hasattr(diarize_result, 'speaker_diarization'):
-                    diarization = diarize_result.speaker_diarization
-                else:
-                    diarization = diarize_result  # older versions return Annotation directly
-                segments, speakers = _merge_diarization_with_segments(segments, diarization)
-                print(f"Diarization complete. Found {len(speakers)} speakers.", flush=True)
-            except Exception as e:
-                print(f"Diarization failed (continuing without): {e}", flush=True)
-                # Continue without diarization — segments just won't have speaker labels
-
-        # --- Step 3: Save outputs ---
 
         # Read meta.json for date info and speaker names
         meta_path = output_dir / "meta.json"
@@ -239,6 +222,13 @@ async def transcribe(req: TranscribeRequest):
         # Save transcript.md
         _write_transcript_md(output_dir, meta, segments, duration, speaker_names)
 
+        # --- Step 3: Kick off diarization in background ---
+        if req.diarize and _hf_token:
+            import asyncio
+            asyncio.get_event_loop().run_in_executor(
+                None, _run_diarization_background, str(audio_path), str(output_dir)
+            )
+
         return TranscribeResponse(
             text=full_text,
             segments=segments,
@@ -249,6 +239,55 @@ async def transcribe(req: TranscribeRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _run_diarization_background(audio_path: str, output_dir: str):
+    """Run diarization in background and update transcript files."""
+    try:
+        pipeline = get_diarization_pipeline()
+        print(f"[diarize] Running diarization on {audio_path}...", flush=True)
+        diarize_result = pipeline(audio_path)
+
+        if hasattr(diarize_result, 'speaker_diarization'):
+            diarization = diarize_result.speaker_diarization
+        else:
+            diarization = diarize_result
+
+        # Load existing transcript
+        output_path = Path(output_dir)
+        transcript_path = output_path / "transcript.json"
+        with open(transcript_path) as f:
+            transcript = json.load(f)
+
+        segments, speakers = _merge_diarization_with_segments(transcript["segments"], diarization)
+        transcript["segments"] = segments
+        transcript["speakers"] = speakers
+
+        # Save updated transcript.json
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            json.dump(transcript, f, indent=2, ensure_ascii=False)
+
+        # Update meta.json with speakers
+        meta_path = output_path / "meta.json"
+        meta = {}
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        meta["speakers"] = speakers
+        if "speaker_names" not in meta:
+            meta["speaker_names"] = {}
+        for spk in speakers:
+            if spk not in meta["speaker_names"]:
+                meta["speaker_names"][spk] = spk
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        # Regenerate transcript.md
+        _write_transcript_md(output_path, meta, segments, transcript.get("duration", 0), meta.get("speaker_names", {}))
+
+        print(f"[diarize] Complete! Found {len(speakers)} speakers.", flush=True)
+    except Exception as e:
+        print(f"[diarize] Failed: {e}", flush=True)
 
 
 def _write_transcript_md(
@@ -296,6 +335,30 @@ def _write_transcript_md(
                 f.write(f"**[{timestamp}] {display_name}:** {seg['text']}\n\n")
             else:
                 f.write(f"**[{timestamp}]** {seg['text']}\n\n")
+
+
+@app.get("/diarize-status/{recording_id}")
+async def diarize_status(recording_id: str):
+    """Check if diarization has completed for a recording."""
+    settings = load_settings_file()
+    storage = settings.get("storage_path", "")
+    if not storage:
+        return {"status": "unknown"}
+    transcript_path = Path(storage) / recording_id / "transcript.json"
+    if transcript_path.exists():
+        with open(transcript_path) as f:
+            t = json.load(f)
+        if t.get("speakers"):
+            return {"status": "complete", "speakers": t["speakers"]}
+    return {"status": "pending"}
+
+
+def load_settings_file():
+    settings_path = Path.home() / "SoloKeeper" / "settings.json"
+    if settings_path.exists():
+        with open(settings_path) as f:
+            return json.load(f)
+    return {}
 
 
 @app.post("/regenerate-md")
