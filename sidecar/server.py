@@ -178,7 +178,12 @@ async def transcribe(req: TranscribeRequest):
             try:
                 pipeline = get_diarization_pipeline()
                 print(f"Running diarization on {audio_path}...", flush=True)
-                diarization = pipeline(str(audio_path))
+                diarize_result = pipeline(str(audio_path))
+                # pyannote >= 3.x returns DiarizeOutput; extract Annotation
+                if hasattr(diarize_result, 'speaker_diarization'):
+                    diarization = diarize_result.speaker_diarization
+                else:
+                    diarization = diarize_result  # older versions return Annotation directly
                 segments, speakers = _merge_diarization_with_segments(segments, diarization)
                 print(f"Diarization complete. Found {len(speakers)} speakers.", flush=True)
             except Exception as e:
