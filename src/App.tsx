@@ -544,6 +544,18 @@ function RecordingsPage({
                       Rename Speakers
                     </button>
                   )}
+                  {selectedRecording.has_transcript && (
+                    <button
+                      onClick={() => {
+                        const mdPath = selectedRecording.folder_path + "/transcript.md";
+                        navigator.clipboard.writeText(mdPath);
+                      }}
+                      className="px-3 py-1.5 rounded text-sm bg-bg-tertiary hover:bg-border text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
+                      title="Copy path to transcript.md"
+                    >
+                      📋 Copy path
+                    </button>
+                  )}
                   {!selectedRecording.has_transcript && (
                     <button
                       onClick={() => onTranscribe(selectedRecording)}
