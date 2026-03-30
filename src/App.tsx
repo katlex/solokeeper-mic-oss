@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -60,9 +60,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 function audioFileUrl(path: string): string {
-  // Encode each path segment separately, preserving slashes
-  const encoded = path.split('/').map(encodeURIComponent).join('/');
-  return `http://audiofile.localhost${encoded}`;
+  return convertFileSrc(path);
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
