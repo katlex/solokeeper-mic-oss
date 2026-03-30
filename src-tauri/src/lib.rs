@@ -261,8 +261,6 @@ pub fn run() {
                         if let Some(range) = ranges.first() {
                             let start = range.start;
                             let length = range.length.min(1024 * 1024); // 1MB max per chunk
-                            let end = start + length - 1;
-
                             file.seek(SeekFrom::Start(start)).ok();
                             let mut buf = vec![0u8; length as usize];
                             let read = file.read(&mut buf).unwrap_or(0);
