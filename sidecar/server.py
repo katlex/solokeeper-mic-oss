@@ -50,12 +50,20 @@ def get_diarization_pipeline():
             )
         from pyannote.audio import Pipeline
 
+        import torch
+
         print("Loading pyannote diarization pipeline...", flush=True)
         _diarization_pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
             token=_hf_token,
         )
-        print("Diarization pipeline loaded.", flush=True)
+
+        # Use Apple Silicon GPU (Metal) if available for ~3-5x speedup
+        if torch.backends.mps.is_available():
+            _diarization_pipeline = _diarization_pipeline.to(torch.device("mps"))
+            print("Diarization pipeline loaded (MPS/Metal GPU).", flush=True)
+        else:
+            print("Diarization pipeline loaded (CPU).", flush=True)
     return _diarization_pipeline
 
 
