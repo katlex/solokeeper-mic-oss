@@ -227,33 +227,76 @@ pub fn run() {
             current_folder: Mutex::new(None),
             recording_start: Mutex::new(None),
         })
-        .register_uri_scheme_protocol("audiofile", |_app, request| {
-            let uri = request.uri();
-            let path_str = uri.path();
-            // Strip leading slash, then percent-decode
-            let trimmed = path_str.strip_prefix('/').unwrap_or(path_str);
-            let decoded = percent_decode(trimmed);
-            eprintln!("[audiofile] Requested: {} -> {}", path_str, decoded);
+        .register_asynchronous_uri_scheme_protocol("audiofile", move |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                let uri = request.uri();
+                let path_str = uri.path();
+                let trimmed = path_str.strip_prefix('/').unwrap_or(path_str);
+                let decoded = percent_decode(trimmed);
+                eprintln!("[audiofile] Requested: {}", decoded);
 
-            match std::fs::read(&decoded) {
-                Ok(content) => {
-                    let len = content.len();
-                    tauri::http::Response::builder()
-                        .header("Content-Type", "audio/wav")
-                        .header("Content-Length", len.to_string())
-                        .header("Accept-Ranges", "bytes")
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(content)
-                        .unwrap()
+                let file = match std::fs::File::open(&decoded) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("[audiofile] Error: {}", e);
+                        responder.respond(
+                            tauri::http::Response::builder()
+                                .status(404)
+                                .body(format!("Not found: {}", e).into_bytes())
+                                .unwrap(),
+                        );
+                        return;
+                    }
+                };
+
+                use std::io::{Read, Seek, SeekFrom};
+                let mut file = file;
+                let len = file.seek(SeekFrom::End(0)).unwrap_or(0);
+                file.seek(SeekFrom::Start(0)).ok();
+
+                let range_header = request.headers().get("range").and_then(|v| v.to_str().ok()).map(String::from);
+
+                if let Some(range_str) = range_header {
+                    if let Ok(ranges) = http_range::HttpRange::parse(&range_str, len) {
+                        if let Some(range) = ranges.first() {
+                            let start = range.start;
+                            let length = range.length.min(1024 * 1024); // 1MB max per chunk
+                            let end = start + length - 1;
+
+                            file.seek(SeekFrom::Start(start)).ok();
+                            let mut buf = vec![0u8; length as usize];
+                            let read = file.read(&mut buf).unwrap_or(0);
+                            buf.truncate(read);
+
+                            let resp = tauri::http::Response::builder()
+                                .status(206)
+                                .header("Content-Type", "audio/wav")
+                                .header("Content-Range", format!("bytes {}-{}/{}", start, start + read as u64 - 1, len))
+                                .header("Content-Length", read.to_string())
+                                .header("Accept-Ranges", "bytes")
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(buf)
+                                .unwrap();
+                            responder.respond(resp);
+                            return;
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[audiofile] Error reading '{}': {}", decoded, e);
-                    tauri::http::Response::builder()
-                        .status(404)
-                        .body(format!("File not found: {}", e).into_bytes())
-                        .unwrap()
-                }
-            }
+
+                // No range — return full file
+                file.seek(SeekFrom::Start(0)).ok();
+                let mut buf = Vec::with_capacity(len as usize);
+                file.read_to_end(&mut buf).ok();
+
+                let resp = tauri::http::Response::builder()
+                    .header("Content-Type", "audio/wav")
+                    .header("Content-Length", len.to_string())
+                    .header("Accept-Ranges", "bytes")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(buf)
+                    .unwrap();
+                responder.respond(resp);
+            });
         })
         .setup(|app| {
             // Set up tray icon with menu
