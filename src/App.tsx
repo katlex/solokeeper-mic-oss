@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -59,13 +59,8 @@ function formatTimestamp(seconds: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-async function loadAudioBlob(path: string): Promise<string> {
-  const b64 = await invoke<string>("get_audio_base64", { path });
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: "audio/wav" });
-  return URL.createObjectURL(blob);
+function audioFileUrl(path: string): string {
+  return convertFileSrc(path);
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -101,7 +96,7 @@ function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
-  const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
+
 
 
   // Speaker naming
@@ -165,18 +160,6 @@ function App() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [isRecording]);
-
-  // Load audio blob when recording changes
-  useEffect(() => {
-    if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
-    setAudioBlobUrl(null);
-    if (selectedRecording?.audio_path) {
-      loadAudioBlob(selectedRecording.audio_path).then(setAudioBlobUrl).catch(console.error);
-    }
-    return () => {
-      if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
-    };
-  }, [selectedRecording?.id]);
 
   // Audio time tracking
   useEffect(() => {
@@ -378,7 +361,6 @@ function App() {
           onSearch={handleSearch}
           onSeekTo={handleSeekTo}
           audioRef={audioRef}
-          audioBlobUrl={audioBlobUrl}
           isPlaying={isPlaying}
           playbackTime={playbackTime}
           editingSpeakers={editingSpeakers}
@@ -412,7 +394,7 @@ function RecordingsPage({
   isRecording, elapsed, levelWidth, recordings, selectedRecording,
   transcribing, sidecarOnline, searchQuery, isSearching,
   onStartRecording, onStopRecording, onSelectRecording, onTranscribe, onSearch,
-  onSeekTo, audioRef, audioBlobUrl, isPlaying, playbackTime,
+  onSeekTo, audioRef, isPlaying, playbackTime,
   editingSpeakers, speakerDraft, onStartEditSpeakers, onCancelEditSpeakers,
   onUpdateSpeakerDraft, onSaveSpeakerNames,
 }: {
@@ -432,7 +414,6 @@ function RecordingsPage({
   onSearch: (q: string) => void;
   onSeekTo: (secs: number) => void;
   audioRef: React.RefObject<HTMLAudioElement | null>;
-  audioBlobUrl: string | null;
   isPlaying: boolean;
   playbackTime: number;
   editingSpeakers: boolean;
@@ -618,7 +599,7 @@ function RecordingsPage({
             {/* Audio Player */}
             {selectedRecording.audio_path && (
               <div className="px-6 py-3 border-b border-border bg-bg-secondary flex items-center gap-3">
-                <audio ref={audioRef} src={audioBlobUrl || ""} preload="metadata" />
+                <audio ref={audioRef} src={audioFileUrl(selectedRecording.audio_path)} preload="metadata" />
                 <button
                   onClick={() => {
                     if (audioRef.current) {
